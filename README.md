@@ -5,4 +5,4 @@
 + Database Operation
 
 # Design of the System
-![image]([https://github.com/HanX-gthb/CSU2022-OSLAB/blob/main/Structure.png](https://github.com/HanX-gthb/CSU2022-PythonLab-CrawlerAndVisualization/blob/main/structure.png))
+![image](https://github.com/HanX-gthb/CSU2022-PythonLab-CrawlerAndVisualization/blob/main/structure.png)
