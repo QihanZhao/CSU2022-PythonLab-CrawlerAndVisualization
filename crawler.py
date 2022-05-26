@@ -1,80 +1,131 @@
 import asyncio
-from xml.sax.xmlreader import AttributesImpl
 import pyppeteer as pyp
 import bs4
 import re
+import pandas as pd
+import mplfinance as mpf
+
+from requests import request
+import requests
+
 
 #反反爬措施
 async def antiAntiCrawler(page):
-    await page.setUserAgent ( 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) \
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 6.1; Win64; x64) \
                                 AppleWebKit/537.36 (KHTML,like Gecko) \
                                 Chrome/78.0.3904.70 \
-                                Safari/537.36'                                                                                                                                                                                                                                                                                    )
-    await page.evaluateOnNewDocument (' () =>{ object. defineProperties \
-                                        (navigator, { webdriver:{ get: () => false } }) }'                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            )
+                                Safari/537.36')
+    await page.evaluateOnNewDocument(' () =>{ object. defineProperties \
+                                        (navigator, { webdriver:{ get: () => false } }) }'
+                                     )
 
-#索引集合获取：3种实现---------------------------------------------------
-# #正则表达式耗时：0:00:00.033943
-# async def getStockCodes(page) :
-#     #从"https://www.banban.cn/gupiao/list_sh.html"对应的page获取所有股票名称和代码
-#     codes=[]
-#     #最终内容: [" 四川路桥(600039) " , "包钢股份(600010)"......]
-#     html = await page.content()
-#     pt = '<a href="/gupiao/\d*/">([^<]*\(\d+\))</a>'
-#     #对应<li><a href=" /gupiao/600151/">航天机电(600151)</a></li>
-#     for x in re.findall (pt ,html) :
-#         codes.append (x)
-#     return codes
 
-#BeautifulSoap耗时: 0:00:00.193480
-async def getStockCodes(page) :
-    codes=[]
+async def getStockList(page, listURL):
+    await page.goto(listURL)  #装入url对应的网页
+    codes = []
     html = await page.content()
-    htmlInBS = bs4.BeautifulSoup (html,"html.parser")
-    for x in htmlInBS.find_all("a", attrs={"class": "ared", "target": "_blank"}):
-        #对应<li><a href=" /gupiao/ 600151/">航天机电(600151)</a></li>
-        codes.append(x.text)
+    htmlInBS = bs4.BeautifulSoup(html, "html.parser")
+    count = 0
+    for x in htmlInBS.find_all("a",
+                attrs={"target": "_blank","href":re.compile("^gpdm\.asp\?gpdm=(\d{6})")}):
+        if (count == 28):
+            break
+        count += 1
+        name = x.string
+        href = x.attrs['href']
+        code = re.search("gpdm\.asp\?gpdm=(\d{6})", href).group(1)
+        industry = x.parent.parent.find("font").string
+        codes.append([name, code, industry])
     return codes
 
-# #pyppeteer耗时: 0:00:04.421178
-# async def getStockCodes (page) :
-#     codes = [ ]
-#     elements = await page.querySelectorAll ("li") #根据tag name找元素
-#     #对应<li><a href="/gupiao/600151/">航天机电(600151)</a></li>
-#     for e in elements :
-#         a = await e.querySelector ("a") #根据tag name找元素
-#         obj = await a.getProperty ("innerText" )  #还可以a.getProperty ("href")
-#         text = await obj.jsonvalue() #固定写法
-#         if("("in text and ")" in text):
-#             codes.append (text)
-#     return codes
-#------------------------------------------------------------------------
 
-async def getStockInfo(url):
+def getStockList2(listURL):
+    r = requests.get(url=listURL)
+    html = r.text
+    codes = []
+    count = 0
+    # p = r'target="_blank" href=".*?">(.*?)</a>'
+    p = r'''<tr  height="25">[^<]*<td>\d{1,3}</td>[^<]*<td>(\d{6})</td>[^<]*<td class=.*?><a.*?>(.*?)</a>'''
+    for m in re.finditer(p, html):
+        print(m)
+        count += 1
+    print(count)
+    return codes
+
+
+async def getStockInfo(oneStock, page, stockURL):
+
+    url = stockURL + oneStock[
+        1] + "/lshq.shtml"  # oneStock[1] is the code of this stock
+    print(url)
+    await page.goto(url)
+    html = await page.content()
+    htmlInBS = bs4.BeautifulSoup(html, "html.parser")
+    table = htmlInBS.find("table",
+                          attrs={"class": "tableQ","id": "BIZ_hq_historySearch"})
+    body = table.find("tbody")
+    lst = body.contents
+    history30Data = []
+    for i in range(1, 31):
+        history1Data = []
+        for y in lst[i].contents:
+            if (y.string[0].isdigit() or y.string[0] == "-"):
+                history1Data.append(y.string)
+        history30Data.append(history1Data)
+    print(len(history30Data))
+    return history30Data
+
+
+def showOneKLineChart(rawData):
+    data = [(i[1:3] + i[5:8]) for i in rawData]
+    dataNumber = []
+    for line in data:
+        # print(line)
+        dataNumber.append([float(x) for x in line])
+    print(dataNumber)
+    index = [i[0] for i in rawData]
+    index = pd.DatetimeIndex(index)
+
+    columns = ['Open', 'Close', 'Low', 'High', 'Volume']
+    daily = pd.DataFrame(dataNumber, columns=columns, index=index)
+    daily.index.name = 'Date'
+
+    print(daily)
+
+    # mpf.plot(daily)
+    mpf.plot(daily,
+             type='candle',
+             mav=(3, 6, 9),
+             volume=True,
+             savefig=dict(fname='KOsmall', dpi=60))
+
+
+async def main():
+
     browser = await pyp.launch(headless=False,
                                executablePath="D:/chrome-win/chrome.exe",
                                userdataDir="D:/tmpForCrawler"
                                )  #启动Chromium , browser即为Chromium浏览器，非隐藏启动
-    page = await browser.newPage()    #在浏览器中打开一个新页面(标签)
-    await antiAntiCrawler (page)    #新页面生成后一律调用此来反反爬
-    await page.goto (url)    #装入url对应的网页
-    #------------------------------------------------------
-    codes = await getStockCodes (page)
-    #------------------------------------------------------
-    for x in codes[ :3] :   #只取前三个股票信息
-        print("-----" ,x)   #x形如"四川路桥(600039)"
-        # pos1, pos2 = x.index("("), x.index(")")
-        # code =x [pos1 + 1 :pos2] #取股票代码,如600039
-        # url = "https://quote.eastmoney.com/sh" + code + ".html"
-        # await page.goto (url)
-        # html = await page. content() #往下编程前可以先print (html)看一看
-        # pt = '<td>([^<]*)</td>.*?<td[^>]*id= ="gt\d*?"[^>]*>([^<]*)</td> '
-        # for x in re. findall (pt,html, re.DOTALL) :
-        #     print(x[0] ,x[1])
-    #------------------------------------------------------
-    await browser.close ()    #关闭浏览器
+    page = await browser.newPage()  #在浏览器中打开一个新页面(标签)
+    await antiAntiCrawler(page)  #新页面生成后一律调用此来反反爬
+
+    listURL = "http://www.shdjt.com/flsort.asp?lb=993505"
+    stockCodeList = await getStockList(page, listURL)
+    # stockCodeList = getStockList2(listURL)
+    print(stockCodeList)
+
+    individualURL = "https://q.stock.sohu.com/cn/"
+    oneStockInfoList = await getStockInfo(stockCodeList[2], page,
+                                          individualURL)
+    print(oneStockInfoList)
+
+    showOneKLineChart(oneStockInfoList)
+
+    await browser.close()  #关闭浏览器
 
 
-url = "http://www.shdjt.com/flsort.asp?lb=993505"
-loop = asyncio.get_event_loop()
-loop.run_until_complete (getStockInfo (url))
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    mainTask = loop.create_task(main())
+    loop.run_until_complete(mainTask)
+    # main()
